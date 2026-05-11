@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Canal Pulse - 运河脉动全息交互</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #00ffcc;
+            --bronze-color: #cd7f32;
+            --bg-glass: rgba(10, 20, 30, 0.4);
+            --border-glass: rgba(0, 255, 204, 0.3);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            color: white;
+        }
+
+        /* 摄像头全屏底层 */
+        .input_video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 0;
+            opacity: 0.15;
+        }
+
+        /* 3D 渲染层 */
+        #webgl-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        /* ---------------- Intro 初始界面层 ---------------- */
+        #intro-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 30;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 1s ease;
+        }
+
+        .intro-title {
+            font-size: 4rem;
+            letter-spacing: 15px;
+            font-weight: 300;
+            color: #fff;
+            text-shadow: 0 0 20px rgba(0, 255, 204, 0.8);
+            margin-bottom: 20px;
+            transition: all 1s ease;
+        }
+
+        .intro-subtitle {
+            font-size: 1.2rem;
+            letter-spacing: 5px;
+            color: var(--primary-color);
+            opacity: 0.8;
+            margin-bottom: 60px;
+            transition: all 1s ease;
+        }
+
+        .intro-prompt {
+            font-size: 1rem;
+            color: #aaa;
+            letter-spacing: 2px;
+            animation: pulseText 2s infinite;
+        }
+
+        /* 节点导航容器 */
+        .nodes-container {
+            position: absolute;
+            bottom: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 40px;
+            opacity: 0;
+            transition: opacity 1s ease;
+            pointer-events: none;
+        }
+
+        .node-item {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .node-circle {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: 2px solid rgba(0, 255, 204, 0.3);
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+            font-weight: bold;
+            color: rgba(255, 255, 255, 0.5);
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .node-progress {
+            position: absolute;
+            top: -5px; left: -5px; right: -5px; bottom: -5px;
+            border-radius: 50%;
+            border: 4px solid transparent;
+            border-top-color: var(--primary-color);
+            opacity: 0;
+            transform: rotate(-90deg);
+        }
+
+        .node-label {
+            font-size: 12px;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.6);
+            white-space: nowrap;
+            transition: color 0.3s;
+        }
+
+        /* 手势空间光标 */
+        #hand-cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            background: rgba(0, 255, 204, 0.3);
+            box-shadow: 0 0 15px var(--primary-color);
+            transform: translate(-50%, -50%);
+            z-index: 999;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.1s linear;
+        }
+
+        /* ---------------- 主 UI 交互层 ---------------- */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 1s ease;
+        }
+
+        .glass-panel {
+            background: var(--bg-glass);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--border-glass);
+            border-radius: 12px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            pointer-events: auto;
+        }
+
+        .unit-title-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 25px;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none;
+        }
+
+        .unit-id-tag {
+            font-size: 10px;
+            color: var(--primary-color);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        .unit-name-text {
+            font-size: 18px;
+            letter-spacing: 3px;
+            font-weight: 300;
+        }
+
+        .status-bar {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 30px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-item {
+            display: flex; align-items: center; gap: 8px; font-size: 14px;
+        }
+
+        .indicator {
+            width: 10px; height: 10px; border-radius: 50%; background: red;
+        }
+        .indicator.active { background: #0f0; box-shadow: 0 0 10px #0f0; }
+
+        .clickable-status {
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+        .clickable-status:hover {
+            color: var(--primary-color);
+        }
+
+        .subtitle-panel {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            width: 60%; max-width: 800px; padding: 20px; text-align: center;
+            font-size: 18px; color: #ddd; letter-spacing: 2px;
+        }
+        .subtitle-title { color: var(--primary-color); font-size: 12px; margin-bottom: 8px; }
+
+        .nav-controls {
+            position: absolute; top: 20px; right: 40px; display: flex; gap: 15px; z-index: 50;
+        }
+
+        .nav-btn {
+            background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(0, 255, 204, 0.4);
+            color: white; padding: 12px 24px; border-radius: 8px; cursor: pointer;
+            font-size: 14px; letter-spacing: 2px; transition: all 0.3s;
+            backdrop-filter: blur(5px); position: relative; overflow: hidden;
+        }
+
+        .nav-btn:hover {
+            border-color: var(--primary-color); color: var(--primary-color);
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.3);
+        }
+
+        .artifact-label {
+            position: absolute; background: rgba(0, 0, 0, 0.7);
+            border: 1px solid var(--bronze-color); color: var(--bronze-color);
+            padding: 8px 12px; font-size: 12px; transform: translate(-50%, -50%);
+            pointer-events: none; opacity: 0; transition: opacity 0.2s;
+        }
+
+        #loading {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 100; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; transition: opacity 1s;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 3px solid rgba(0,255,204,0.3);
+            border-top-color: var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes pulseText { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+    </style>
+</head>
+<body>
+
+    <audio id="bgm" loop preload="auto">
+        <source src="https://assets.mixkit.co/active_storage/sfx/1166/1166-preview.mp3" type="audio/mpeg">
+    </audio>
+    <audio id="bgm-scene2" loop preload="auto">
+        <source src="https://cdn.jsdelivr.net/gh/caomi0211-cmyk/bwg@main/%E5%8F%A4%E5%85%B8%E7%BC%96%E9%92%9F%E9%9F%B3%E4%B9%90%20%E5%8F%A4%E4%BB%A3%E4%B9%90%E5%99%A8%20%20%E8%A1%A8%E6%BC%94%20%E7%9A%87%E5%AE%AB_%E7%88%B1%E7%BB%99%E7%BD%91_aigei_com.mp3" type="audio/mpeg">
+    </audio>
+
+    <video class="input_video" autoplay playsinline></video>
+    <div id="webgl-container"></div>
+    <div id="hand-cursor"></div>
+
+    <div id="intro-layer">
+        <div class="intro-title" style="font-size: 3.5rem; letter-spacing: 10px;">淮安—运河之都</div>
+        <div class="intro-prompt" id="intro-prompt" style="margin-top: 40px;">请抬起你的双手，进入水的数字记忆之中</div>
+
+        <div class="nodes-container" id="nodes-container"></div>
+    </div>
+
+    <div id="ui-layer">
+        <div class="glass-panel unit-title-panel" id="unit-title-panel">
+            <div class="unit-id-tag" id="unit-id-tag">UNIT 01</div>
+            <div class="unit-name-text" id="unit-name-text">人文初开</div>
+        </div>
+
+        <div class="glass-panel status-bar">
+            <div class="status-item"><div class="indicator" id="camera-status"></div> CAMERA</div>
+            <div class="status-item"><div class="indicator" id="tracking-status"></div> HAND TRACKING</div>
+            <div class="status-item clickable-status" id="toggle-music" title="点击切换环境音">
+                <div class="indicator" id="music-status"></div> MUSIC
+            </div>
+            <div class="status-item clickable-status" id="toggle-voice" title="点击切换语音助手">
+                <div class="indicator active" id="voice-status"></div> VOICE
+            </div>
+            <div class="status-item" style="color: var(--primary-color);">GESTURE: <span id="gesture-text">NONE</span></div>
+        </div>
+
+        <div class="glass-panel subtitle-panel">
+            <div class="subtitle-title" id="scene-title">- 人文初开 -</div>
+            <div id="subtitle-text">万物生于混沌，文明孕于微光。五千年前的青莲岗，先民在泥土中留下了最初的印记。试着收缩掌心，握紧命运的流沙。</div>
+        </div>
+
+        <div id="labels-container"></div>
+
+        <div class="nav-controls">
+            <button class="nav-btn" id="btn-home">⏏ 返回中枢</button>
+            <button class="nav-btn" id="btn-next">下一单元 ⏭</button>
+        </div>
+    </div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <h2 style="margin-top:20px; font-weight:300; letter-spacing:3px;">连接数字水脉...</h2>
+    </div>
+
+<script>
+/**
+ * Canal Pulse - 全息交互核心逻辑
+ */
+
+// ==========================================
+// 语音助手 (Web Speech API) - 运河意识
+// ==========================================
+const VoiceManager = {
+    synth: window.speechSynthesis,
+    voice: null,
+    enabled: true,
+    isSequencing: false,     
+    sequenceQueue: [],       
+    onLineStart: null,       
+    activeUtterance: null, 
+
+    init() {
+        const loadVoices = () => {
+            const voices = this.synth.getVoices();
+            this.voice = voices.find(v => v.lang.includes('zh') && v.localService && (v.name.includes('Xiaoxiao') || v.name.includes('晓晓') || v.name.includes('Yaoyao') || v.name.includes('Tingting')))
+                      || voices.find(v => v.lang.includes('zh') && v.localService)
+                      || voices.find(v => v.lang.includes('zh') && (v.name.includes('Xiaoxiao') || v.name.includes('Online')))
+                      || voices.find(v => v.lang.includes('zh') || v.name.includes('Chinese')) 
+                      || voices[0];
+        };
+        loadVoices();
+        if (this.synth.onvoiceschanged !== undefined) {
+            this.synth.onvoiceschanged = loadVoices;
+        }
+    },
+    speak(text) {
+        if (!this.enabled || !text) return;
+        this.stop(); 
+
+        let rhythmicText = text.replace(/——/g, '，');
+        const utterance = new SpeechSynthesisUtterance(rhythmicText);
+        if (this.voice) utterance.voice = this.voice;
+        utterance.lang = 'zh-CN';
+        
+        utterance.rate = 1.25;  
+        utterance.pitch = 0.4;  
+        utterance.volume = 1.0; 
+        
+        this.activeUtterance = utterance; 
+        this.synth.speak(utterance);
+    },
+    speakSequence(lines, onLineStart) {
+        if (!this.enabled || !lines || lines.length === 0) return;
+        this.stop();
+        this.isSequencing = true;
+        this.sequenceQueue = [...lines]; 
+        this.onLineStart = onLineStart;
+        this.playNextInSequence();
+    },
+    playNextInSequence() {
+        if (!this.isSequencing || this.sequenceQueue.length === 0) return;
+        const text = this.sequenceQueue.shift();
+        
+        if (this.onLineStart) this.onLineStart(text);
+
+        const utterance = new SpeechSynthesisUtterance(text.replace(/——/g, '，'));
+        if (this.voice) utterance.voice = this.voice;
+        utterance.lang = 'zh-CN';
+        
+        utterance.rate = 1.25;  
+        utterance.pitch = 0.4;  
+        utterance.volume = 1.0; 
+        
+        this.activeUtterance = utterance; 
+
+        utterance.onend = () => {
+            if (this.isSequencing) {
+                setTimeout(() => { this.playNextInSequence(); }, 200); 
+            }
+        };
+        utterance.onerror = () => {
+            if (this.isSequencing) {
+                setTimeout(() => { this.playNextInSequence(); }, 200); 
+            }
+        };
+
+        this.synth.speak(utterance);
+    },
+    stop() {
+        this.isSequencing = false;
+        this.sequenceQueue = [];
+        this.activeUtterance = null;
+        this.synth.cancel();
+    },
+    toggle() {
+        this.enabled = !this.enabled;
+        if (!this.enabled) this.stop();
+        const indicator = document.getElementById('voice-status');
+        if (this.enabled) indicator.classList.add('active');
+        else indicator.classList.remove('active');
+    }
+};
+VoiceManager.init();
+document.getElementById('toggle-voice').addEventListener('click', () => VoiceManager.toggle());
+
+// ==========================================
+// 全局状态管理
+// ==========================================
+const AppState = {
+    currentScene: 0,
+    introAwaked: false,
+    bgmPlaying: false,
+    hand: {
+        detected: false,
+        landmarks: null,
+        gesture: 'None',
+        screenX: 0,
+        screenY: 0,
+        pinchStartY: 0
+    },
+    hoverState: {
+        targetNode: null,
+        progress: 0
+    },
+    uiHoverState: {
+        targetBtn: null,
+        progress: 0
+    },
+    sceneProgress: {
+        1: 0, 
+        2: 0  
+    },
+    scene1EntranceProgress: 0, 
+    scene1NarrationState: 0, 
+    scene1SuccessSpoken: false, 
+    scene1CurrentText: "", 
+    scene2EntranceProgress: 0, 
+    scene2NarrationState: 0, 
+    scene2SuccessSpoken: false, 
+    scene2CurrentText: "", 
+    waterOpacityTarget: 1.0,
+    waterOpacityCurrent: 1.0,
+    waterZTarget: 0,
+    waterZCurrent: 0
+};
+
+const SceneData = [
+    { 
+        id: 1, 
+        name: "人文初开", 
+        descLines: [
+            "很久以前，淮河缓缓流过这片土地。",
+            "人们沿水而居，",
+            "在河岸种植稻谷、磨制石器、烧造陶器。",
+            "河流孕育村落，土地滋养文明。",
+            "试着握紧它们。"
+        ],
+        descSuccess: "文明，沿河而生。"
+    },
+    { 
+        id: 2, 
+        name: "楚韵汉风", 
+        descLines: [
+            "青铜铸鼎，礼制初成。",
+            "龙纹、云纹与钟鸣，",
+            "诉说着楚地神秘而庄严的文明。",
+            "淮安，开始融入更宏大的国家秩序。",
+            "请张开手掌，唤醒沉睡千年的青铜礼器。"
+        ],
+        descSuccess: "一个属于礼制与王朝的时代，正缓缓展开。" 
+    },
+    { id: 3, name: "南北锁钥", desc: "宏大地理格局推演。(概念演示区)" },
+    { id: 4, name: "漕运中枢", desc: "天下漕粮转运，实例化渲染展示。(概念演示区)" },
+    { id: 5, name: "盐榷重关", desc: "盐晶体透视与材质折射。(概念演示区)" },
+    { id: 6, name: "河务关键", desc: "基于物理引擎的流体沙盒。(概念演示区)" },
+    { id: 7, name: "英杰辈出", desc: "挥动手势，生成属于你的数字光轨留存。(概念演示区)" }
+];
+
+// ==========================================
+// 初始化 UI
+// ==========================================
+const nodesContainer = document.getElementById('nodes-container');
+
+document.getElementById('btn-home').addEventListener('click', returnToHome);
+document.getElementById('btn-next').addEventListener('click', goToNextScene);
+
+function goToNextScene() {
+    if (AppState.currentScene < 7) {
+        enterScene(AppState.currentScene + 1);
+    } else {
+        returnToHome();
+    }
+}
+
+SceneData.forEach((scene) => {
+    const nodeEl = document.createElement('div');
+    nodeEl.className = 'node-item';
+    nodeEl.innerHTML = `
+        <div class="node-circle" id="node-${scene.id}">
+            ${scene.id}
+            <div class="node-progress" id="node-prog-${scene.id}"></div>
+        </div>
+        <div class="node-label">${scene.name}</div>
+    `;
+    nodeEl.dataset.id = scene.id;
+    nodesContainer.appendChild(nodeEl);
+});
+
+// ==========================================
+// 音频控制
+// ==========================================
+const bgm = document.getElementById('bgm');
+const bgmScene2 = document.getElementById('bgm-scene2'); 
+const musicStatusEl = document.getElementById('music-status');
+const toggleMusicBtn = document.getElementById('toggle-music');
+
+function updateBGM() {
+    if (!AppState.bgmPlaying) {
+        bgm.pause();
+        bgmScene2.pause();
+        musicStatusEl.classList.remove('active');
+        return;
+    }
+    
+    musicStatusEl.classList.add('active');
+    
+    if (AppState.currentScene === 2) {
+        bgm.pause();
+        bgmScene2.volume = 0.5; 
+        bgmScene2.play().catch(err => console.log("播放受限", err));
+    } else {
+        bgmScene2.pause();
+        bgm.volume = 0.3;
+        bgm.play().catch(err => console.log("播放受限", err));
+    }
+}
+
+function playBGM() {
+    if (!AppState.bgmPlaying) {
+        AppState.bgmPlaying = true;
+        updateBGM();
+    }
+}
+
+toggleMusicBtn.addEventListener('click', () => {
+    AppState.bgmPlaying = !AppState.bgmPlaying;
+    updateBGM();
+});
+
+// ==========================================
+// Three.js 核心及光照优化
+// ==========================================
+const container = document.getElementById('webgl-container');
+const scene = new THREE.Scene();
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); 
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xfff5e6, 1.2); 
+dirLight.position.set(5, 10, 5);
+scene.add(dirLight);
+const fillLight = new THREE.DirectionalLight(0x8899aa, 0.5); 
+fillLight.position.set(-5, 0, -5);
+scene.add(fillLight);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 10); 
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+const sceneGroups = {};
+for(let i=1; i<=7; i++) {
+    sceneGroups[i] = new THREE.Group();
+    sceneGroups[i].visible = false;
+    scene.add(sceneGroups[i]);
+}
+
+// ==========================================
+// 数字水脉 Shader
+// ==========================================
+let globalWaterShaderMaterial;
+let globalWaterMesh;
+
+function buildGlobalWaterVein() {
+    const particleCount = 200000;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const uvs = new Float32Array(particleCount * 2);
+
+    for(let i=0; i<particleCount; i++) {
+        positions[i*3] = (Math.random() - 0.5) * 120; 
+        const yDist = (Math.random() - 0.5);
+        positions[i*3+1] = yDist * yDist * 40 * Math.sign(yDist); 
+        positions[i*3+2] = (Math.random() - 0.5) * 20 - 3; 
+        uvs[i*2] = Math.random();
+        uvs[i*2+1] = Math.random();
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+    globalWaterShaderMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            u_time: { value: 0.0 },
+            u_colorBase: { value: new THREE.Color(0x001155) },
+            u_colorCrest: { value: new THREE.Color(0x00ffcc) },
+            u_pixelRatio: { value: Math.min(window.devicePixelRatio, 2.0) },
+            u_opacity: { value: 1.0 }
+        },
+        vertexShader: `
+            uniform float u_time;
+            uniform float u_pixelRatio;
+            varying float vElevation;
+            void main() {
+                vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+                float speed = 0.5; 
+                modelPosition.x += u_time * speed;
+                modelPosition.x = mod(modelPosition.x + 60.0, 120.0) - 60.0;
+                float mainTide = sin(modelPosition.x * 0.05 - u_time * 0.8) * 4.0; 
+                float subWave = cos(modelPosition.z * 0.15 + u_time * 0.6) * 2.5;
+                float ripples = sin(modelPosition.x * 0.3 + modelPosition.y * 0.2 - u_time * 1.5) * 0.5; 
+                float elevation = mainTide + subWave + ripples;
+                modelPosition.y += elevation;
+                modelPosition.z += sin(modelPosition.x * 0.1 - u_time * 0.4) * 1.5;
+                vElevation = elevation;
+                vec4 viewPosition = viewMatrix * modelPosition;
+                gl_Position = projectionMatrix * viewPosition;
+                gl_PointSize = (50.0 / -viewPosition.z) * (elevation * 0.05 + 1.1) * u_pixelRatio;
+            }
+        `,
+        fragmentShader: `
+            uniform vec3 u_colorBase;
+            uniform vec3 u_colorCrest;
+            uniform float u_opacity;
+            varying float vElevation;
+            void main() {
+                float dist = distance(gl_PointCoord, vec2(0.5));
+                if(dist > 0.5) discard;
+                float core = smoothstep(0.2, 0.0, dist);
+                float glow = pow(1.0 - (dist * 2.0), 2.0); 
+                float strength = core * 0.7 + glow * 0.4;
+                float mixValue = clamp((vElevation + 3.0) / 8.0, 0.0, 1.0);
+                vec3 finalColor = mix(u_colorBase, u_colorCrest, mixValue);
+                gl_FragColor = vec4(finalColor * 1.3, strength * u_opacity);
+            }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+
+    globalWaterMesh = new THREE.Points(geometry, globalWaterShaderMaterial);
+    scene.add(globalWaterMesh); 
+}
+buildGlobalWaterVein();
+
+function createSoftParticleTexture() {
+    const canvasTex = document.createElement('canvas');
+    canvasTex.width = 32; canvasTex.height = 32;
+    const ctx = canvasTex.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(16, 16, 15, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    return new THREE.CanvasTexture(canvasTex);
+}
+const sharedPointTexture = createSoftParticleTexture();
+
+let s1_particles;
+let s1_labelDom;
+let s1_labelObj;
+
+function buildScene1() {
+    const placeholderCount = 10;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(placeholderCount * 3), 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(placeholderCount * 3), 3));
+    geom.userData.originalPos = new Float32Array(placeholderCount * 3);
+    geom.userData.targetPos = new Float32Array(placeholderCount * 3);
+    
+    s1_particles = new THREE.Points(geom, new THREE.PointsMaterial({ 
+        size: 0.035, 
+        map: sharedPointTexture,
+        vertexColors: true, 
+        transparent: true, 
+        opacity: 0.85, 
+        blending: THREE.AdditiveBlending,
+        depthWrite: false 
+    }));
+    sceneGroups[1].add(s1_particles);
+
+    const loader = new THREE.GLTFLoader();
+    const loadModel = (url) => new Promise((resolve) => loader.load(url, resolve));
+
+    function sampleSurfacePointCloud(geometry, matrixWorld, pointsArray, targetCount) {
+        const posAttr = geometry.attributes.position;
+        const indexAttr = geometry.index;
+        if (!posAttr) return;
+
+        const vA = new THREE.Vector3(); const vB = new THREE.Vector3(); const vC = new THREE.Vector3();
+        const numFaces = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
+        if (numFaces === 0) return;
+
+        for (let i = 0; i < targetCount; i++) {
+            const faceIdx = Math.floor(Math.random() * numFaces);
+            let a, b, c;
+            if (indexAttr) {
+                a = indexAttr.getX(faceIdx * 3); b = indexAttr.getX(faceIdx * 3 + 1); c = indexAttr.getX(faceIdx * 3 + 2);
+            } else {
+                a = faceIdx * 3; b = faceIdx * 3 + 1; c = faceIdx * 3 + 2;
+            }
+
+            vA.fromBufferAttribute(posAttr, a);
+            vB.fromBufferAttribute(posAttr, b);
+            vC.fromBufferAttribute(posAttr, c);
+
+            let r1 = Math.random(); let r2 = Math.random();
+            if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+            const r3 = 1 - r1 - r2;
+
+            const pt = new THREE.Vector3(
+                vA.x * r1 + vB.x * r2 + vC.x * r3,
+                vA.y * r1 + vB.y * r2 + vC.y * r3,
+                vA.z * r1 + vB.z * r2 + vC.z * r3
+            ).applyMatrix4(matrixWorld);
+
+            pointsArray.push(pt);
+        }
+    }
+
+    Promise.all([
+        loadModel('https://cdn.jsdelivr.net/gh/caomi0211-cmyk/bwg@main/c586594e1642672e0a11b4aa9e2c565b-v1.glb'), 
+        loadModel('https://cdn.jsdelivr.net/gh/caomi0211-cmyk/bwg@main/qingliangang-v1.glb') 
+    ]).then(([gltfStart, gltfEnd]) => {
+        
+        const model = gltfEnd.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 8.0 / maxDim; 
+        
+        model.scale.setScalar(scale);
+        model.position.sub(center.multiplyScalar(scale)); 
+        model.updateMatrixWorld(true);
+        
+        const targetPositions = [];
+        model.traverse((child) => {
+            if (child.isMesh && !child.userData.isWireframe) {
+                sampleSurfacePointCloud(child.geometry, child.matrixWorld, targetPositions, 100000);
+            }
+        });
+
+        s1_labelObj = new THREE.Object3D();
+        s1_labelObj.position.set(0, 2.8, 0); 
+        sceneGroups[1].add(s1_labelObj);
+
+        const div = document.createElement('div');
+        div.className = 'artifact-label';
+        div.style.borderColor = 'var(--primary-color)';
+        div.style.color = 'var(--primary-color)';
+        div.style.boxShadow = '0 0 10px rgba(0,255,204,0.3)';
+        div.style.letterSpacing = '2px';
+        div.style.fontSize = '14px';
+        div.innerHTML = `<strong>青莲岗文化遗址陶器</strong>`;
+        document.getElementById('labels-container').appendChild(div);
+        s1_labelDom = div;
+
+        const modelStart = gltfStart.scene;
+        const boxStart = new THREE.Box3().setFromObject(modelStart);
+        const sizeStart = boxStart.getSize(new THREE.Vector3());
+        const centerStart = boxStart.getCenter(new THREE.Vector3());
+        const maxDimStart = Math.max(sizeStart.x, sizeStart.y, sizeStart.z);
+        const scaleStart = 10.0 / maxDimStart; 
+        
+        const pivotStart = new THREE.Group();
+        modelStart.position.sub(centerStart);
+        pivotStart.add(modelStart);
+        pivotStart.scale.setScalar(scaleStart);
+        pivotStart.position.y += 1.0; 
+        pivotStart.rotation.set(Math.PI / 6, -Math.PI / 4, 0); 
+        pivotStart.updateMatrixWorld(true);
+
+        const startPositions = [];
+        modelStart.traverse((child) => {
+            if (child.isMesh) {
+                sampleSurfacePointCloud(child.geometry, child.matrixWorld, startPositions, 100000);
+            }
+        });
+
+        const pCount = targetPositions.length;
+        const sCount = startPositions.length;
+        const maxCount = Math.max(pCount, sCount); 
+        if(maxCount === 0) return; 
+
+        const positions = new Float32Array(maxCount * 3);
+        const originalPosArray = new Float32Array(maxCount * 3); 
+        const targetPosArray = new Float32Array(maxCount * 3);
+        const chaosPosArray = new Float32Array(maxCount * 3);    
+        const colors = new Float32Array(maxCount * 3);
+        const colorObj = new THREE.Color();
+
+        for(let i=0; i<maxCount; i++) {
+            let startV = sCount > 0 ? startPositions[i % sCount] : new THREE.Vector3();
+            let targetV = pCount > 0 ? targetPositions[i % pCount] : new THREE.Vector3();
+
+            originalPosArray[i*3] = startV.x + (Math.random() - 0.5) * 0.15;
+            originalPosArray[i*3+1] = startV.y + (Math.random() - 0.5) * 0.15;
+            originalPosArray[i*3+2] = startV.z + (Math.random() - 0.5) * 0.15;
+
+            chaosPosArray[i*3] = (Math.random() - 0.5) * 80;
+            chaosPosArray[i*3+1] = (Math.random() - 0.5) * 80;
+            chaosPosArray[i*3+2] = (Math.random() - 0.5) * 80;
+
+            positions[i*3] = chaosPosArray[i*3];
+            positions[i*3+1] = chaosPosArray[i*3+1];
+            positions[i*3+2] = chaosPosArray[i*3+2];
+
+            targetPosArray[i*3] = targetV.x;
+            targetPosArray[i*3+1] = targetV.y;
+            targetPosArray[i*3+2] = targetV.z;
+
+            const yRatio = THREE.MathUtils.clamp((targetV.y + 4.0) / 8.0, 0, 1);
+            colorObj.setHSL(0.55 - yRatio * 0.12, 0.9, 0.4 + yRatio * 0.4);
+            colors[i*3] = colorObj.r; colors[i*3+1] = colorObj.g; colors[i*3+2] = colorObj.b;
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.userData.originalPos = originalPosArray; 
+        geometry.userData.targetPos = targetPosArray;      
+        geometry.userData.chaosPos = chaosPosArray; 
+
+        sceneGroups[1].remove(s1_particles);
+        s1_particles = new THREE.Points(geometry, s1_particles.material);
+        sceneGroups[1].add(s1_particles);
+    });
+}
+
+// ==========================================
+// 场景2 (楚韵汉风) - 高级 GPU 着色器粒子阵列
+// ==========================================
+const s2_parts = [];
+let s2_patternParticles = null; 
+
+function buildScene2() {
+    const group = sceneGroups[2];
+
+    // 【排版大重构】：删除所有外围图腾，只保留正中央 1 个大幅放大的核心图腾
+    const patternUrls = [
+        'https://cdn.jsdelivr.net/gh/caomi0211-cmyk/bwg@main/2.10wen.png' // 唯一核心阵眼 (中)
+    ];
+
+    // 【防卡死核心】：加入 onerror 异常捕捉机制！
+    const loadImgSafe = (url) => new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => {
+            console.warn("图片加载超时或失败，已启用安全回退机制: " + url);
+            const fallbackCanvas = document.createElement('canvas');
+            fallbackCanvas.width = 1; fallbackCanvas.height = 1;
+            resolve(fallbackCanvas);
+        };
+        img.src = url;
+    });
+
+    Promise.all(patternUrls.map(loadImgSafe)).then((imgs) => {
+        const startPositions = [];
+        const targetPositions = [];
+        const delays = [];
+        const randoms = [];
+        const patternIndices = []; 
+        const isClones = [];       
+
+        imgs.forEach((img, index) => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // 【提质增量1】：将横向最高采样分辨率从 400 提升到 600，提取更多原始细节
+            let MAX_W = 600; 
+            
+            let w = img.width; let h = img.height;
+            if (!w || !h || w === 0 || h === 0) return; 
+
+            if (w > MAX_W) { h = Math.floor(h * (MAX_W / w)); w = MAX_W; }
+            canvas.width = w; canvas.height = h;
+            ctx.drawImage(img, 0, 0, w, h);
+            const imgData = ctx.getImageData(0, 0, w, h).data;
+
+            // 【物理放大】：将唯一的中心图腾物理高度从 5.0 大幅放大至 6.5
+            let pHeight = 6.5; 
+            
+            const sc = pHeight / h;
+
+            // 核心图腾采用逐像素密集采样，保证极致致密
+            const step = 1; 
+            const alphaThreshold = 60;
+
+            // 【提质增量2】：大幅放开粒子数量封印！从 3.5万 提升至 8万，填充放大后的空间
+            let pointsCount = 0;
+            const MAX_POINTS = 80000;
+
+            for(let y = 0; y < h; y+=step) {
+                for(let x = 0; x < w; x+=step) {
+                    const idx = (y * w + x) * 4;
+                    const alpha = imgData[idx + 3];
+                    
+                    if (alpha > alphaThreshold && pointsCount < MAX_POINTS) { 
+                        pointsCount++;
+                        const localX = (x - w/2) * sc;
+                        const localY = -(y - h/2) * sc;
+                        const localZ = 0.0;
+
+                        const pixelRandom = Math.random(); 
+
+                        for (let t = 0; t < 2; t++) {
+                            targetPositions.push(localX, localY, localZ);
+
+                            const theta = Math.random() * Math.PI * 2;
+                            const phi = Math.acos((Math.random() * 2.0) - 1.0);
+                            const r = 60 + Math.random() * 40;
+                            startPositions.push(
+                                r * Math.sin(phi) * Math.cos(theta),
+                                r * Math.sin(phi) * Math.sin(theta),
+                                r * Math.cos(phi)
+                            );
+
+                            delays.push(t * 0.2); 
+                            randoms.push(pixelRandom); 
+                            
+                            // 核心图腾固定分配到 aPatternIdx = 5.0
+                            let staggerOrder = 5; 
+
+                            patternIndices.push(staggerOrder);     
+                            isClones.push(t === 0 ? 0.0 : 1.0); 
+                        }
+                    }
+                }
+            }
+        });
+
+        if (targetPositions.length > 0) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(startPositions, 3));
+            geom.setAttribute('targetPos', new THREE.Float32BufferAttribute(targetPositions, 3));
+            geom.setAttribute('aDelay', new THREE.Float32BufferAttribute(delays, 1));
+            geom.setAttribute('aRandom', new THREE.Float32BufferAttribute(randoms, 1));
+            geom.setAttribute('aPatternIdx', new THREE.Float32BufferAttribute(patternIndices, 1)); 
+            geom.setAttribute('aIsClone', new THREE.Float32BufferAttribute(isClones, 1));          
+
+            const s2_shaderMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    u_progress: { value: 0.0 }, 
+                    u_dissolve: { value: 0.0 }, 
+                    u_time: { value: 0.0 }
+                },
+                vertexShader: `
+                    attribute vec3 targetPos;
+                    attribute float aDelay;
+                    attribute float aRandom;
+                    attribute float aPatternIdx;
+                    attribute float aIsClone;
+                    
+                    uniform float u_progress;
+                    uniform float u_dissolve;
+                    uniform float u_time;
+                    
+                    varying float vAlpha;
+                    varying vec3 vColor;
+                    varying float vIsClone;
+
+                    void main() {
+                        vIsClone = aIsClone;
+
+                        float staggerStart = aPatternIdx * 0.09; 
+                        float localProgress = clamp((u_progress - staggerStart) * 3.5, 0.0, 1.0);
+
+                        float p_anim = clamp((localProgress * 1.5) - aDelay, 0.0, 1.0);
+                        p_anim = 1.0 - pow(1.0 - p_anim, 4.0); 
+
+                        // 唯一的核心阵眼，雄踞正中
+                        vec3 currentCenter = vec3(0.0, 0.0, 0.5); 
+
+                        vec3 finalTarget = currentCenter + targetPos;
+                        vec3 pos = mix(position, finalTarget, p_anim);
+
+                        float breath = (sin(u_time * 2.0 + aPatternIdx * 1.5) + 1.0) * 0.5; 
+                        float floatMag = 0.005; 
+                        pos.x += sin(u_time * 1.2 + aRandom * 10.0) * floatMag;
+                        pos.y += cos(u_time * 1.5 + aRandom * 10.0) * floatMag;
+                        pos.z += sin(u_time * 1.0 + aRandom * 10.0) * floatMag;
+
+                        float swirlAngle = u_dissolve * (5.0 + aRandom * 2.0);
+                        float s_swirl = sin(swirlAngle);
+                        float c_swirl = cos(swirlAngle);
+                        vec3 exitPos = pos;
+                        exitPos.xy = mat2(c_swirl, -s_swirl, s_swirl, c_swirl) * exitPos.xy; 
+                        exitPos = mix(exitPos, vec3(0.0, 0.0, -10.0), pow(u_dissolve, 1.5)); 
+                        pos = mix(pos, exitPos, u_dissolve);
+
+                        vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                        gl_Position = projectionMatrix * mvPosition;
+
+                        float sizeBreath = mix(0.9, 1.1, breath);
+                        float baseSize = aIsClone == 0.0 ? 30.0 : 45.0;
+                        
+                        // 【画质微调】：因为物理尺寸更大了，点距变宽，适度回调粒子自身半径(0.75)保证线条不断裂
+                        baseSize *= 0.75;
+
+                        gl_PointSize = (baseSize / -mvPosition.z) * (1.0 - aDelay * 0.6) * (1.0 - u_dissolve) * sizeBreath;
+
+                        vColor = mix(vec3(0.85, 0.60, 0.15), vec3(0.0, 0.9, 0.8), aRandom * p_anim);
+                        float cloneFade = aIsClone == 0.0 ? 1.0 : (1.0 - smoothstep(0.8, 1.0, localProgress));
+                        float alphaBreath = mix(0.6, 1.0, breath);
+                        vAlpha = (1.0 - aDelay) * smoothstep(0.0, 0.2, p_anim) * cloneFade * (1.0 - u_dissolve) * alphaBreath;
+                    }
+                `,
+                fragmentShader: `
+                    varying float vAlpha;
+                    varying vec3 vColor;
+                    varying float vIsClone;
+
+                    void main() {
+                        vec2 coord = gl_PointCoord - vec2(0.5);
+                        float dist = length(coord);
+                        if(dist > 0.5) discard;
+                        float core = vIsClone == 0.0 ? smoothstep(0.5, 0.35, dist) : smoothstep(0.5, 0.0, dist);
+                        float intensity = vIsClone == 0.0 ? 0.8 : 1.2;
+                        vec3 finalColor = vColor * core * intensity; 
+                        gl_FragColor = vec4(finalColor, vAlpha * core);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            s2_patternParticles = new THREE.Points(geom, s2_shaderMaterial);
+            group.add(s2_patternParticles);
+        }
+    }).catch(err => {
+        console.error("图片资源网络获取严重崩溃: ", err);
+    });
+
+    const bronzeMat = new THREE.MeshStandardMaterial({ 
+        color: 0xcd7f32, 
+        metalness: 0.8, 
+        roughness: 0.3, 
+        transparent: true, 
+        opacity: 0,
+        depthWrite: true
+    });
+    
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.8, 2.5, 8), bronzeMat);
+    setupExplodePart(core, new THREE.Vector3(0, -6, 0), "主体腹部"); group.add(core); 
+    
+    const topMat = bronzeMat.clone();
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 0.8, 1.0, 8), topMat);
+    top.position.y = 1.75; setupExplodePart(top, new THREE.Vector3(0, 6, 0), "兽首纹盖"); group.add(top); 
+}
+
+function setupExplodePart(mesh, targetVector, labelName) {
+    mesh.userData.origPos = mesh.position.clone();
+    mesh.userData.targetPos = targetVector;
+    const div = document.createElement('div');
+    div.className = 'artifact-label';
+    div.innerHTML = `<strong>${labelName}</strong>`;
+    document.getElementById('labels-container').appendChild(div);
+    mesh.userData.domElement = div;
+    s2_parts.push(mesh);
+}
+
+buildScene1(); buildScene2();
+
+// ==========================================
+// 交互逻辑
+// ==========================================
+const videoElement = document.querySelector('.input_video');
+const handCursor = document.getElementById('hand-cursor');
+
+function onResults(results) {
+    document.getElementById('camera-status').classList.add('active');
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        document.getElementById('tracking-status').classList.add('active');
+        const landmarks = results.multiHandLandmarks[0];
+        AppState.hand.detected = true;
+        const cursorX = (1 - landmarks[9].x) * window.innerWidth;
+        const cursorY = landmarks[9].y * window.innerHeight;
+        AppState.hand.screenX = cursorX; AppState.hand.screenY = cursorY;
+        handCursor.style.opacity = 1; handCursor.style.left = `${cursorX}px`; handCursor.style.top = `${cursorY}px`;
+
+        let currentGesture = 'None';
+        
+        const wrist = landmarks[0];
+        const thumbTip = landmarks[4];
+        const indexTip = landmarks[8];
+        const indexMcp = landmarks[5]; 
+        const middleTip = landmarks[12];
+        const middleMcp = landmarks[9]; 
+
+        const distPinch = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+        const dTip8 = Math.hypot(indexTip.x - wrist.x, indexTip.y - wrist.y);
+        const dMcp5 = Math.hypot(indexMcp.x - wrist.x, indexMcp.y - wrist.y);
+        const dTip12 = Math.hypot(middleTip.x - wrist.x, middleTip.y - wrist.y);
+        const dMcp9 = Math.hypot(middleMcp.x - wrist.x, middleMcp.y - wrist.y);
+
+        const isOpen = (dTip8 > dMcp5 * 1.4) && (dTip12 > dMcp9 * 1.4);
+        const isFist = (dTip8 < dMcp5 * 1.2) && (dTip12 < dMcp9 * 1.2);
+
+        if (distPinch < 0.05) {
+            currentGesture = 'Pinch';
+        } else if (isFist) { 
+            currentGesture = 'Fist';
+        } else if (isOpen) {
+            currentGesture = 'Open'; 
+        } else {
+            currentGesture = 'None'; 
+        }
+
+        AppState.hand.gesture = currentGesture;
+        document.getElementById('gesture-text').innerText = currentGesture;
+
+        if (AppState.currentScene === 0) handleIntroInteraction(cursorX, cursorY);
+        else {
+            handleUIInteraction(cursorX, cursorY);
+            if (AppState.currentScene === 1) {
+                if (AppState.scene1EntranceProgress > 0.95) {
+                    if (currentGesture === 'Fist') AppState.sceneProgress[1] += 0.01;
+                    else AppState.sceneProgress[1] -= 0.015; 
+                } else {
+                    AppState.sceneProgress[1] -= 0.05; 
+                }
+                AppState.sceneProgress[1] = THREE.MathUtils.clamp(AppState.sceneProgress[1], 0, 1);
+            } else if (AppState.currentScene === 2) {
+                if (AppState.scene2EntranceProgress > 0.98) {
+                    if (currentGesture === 'Open') {
+                        AppState.sceneProgress[2] += 0.015; 
+                    } else {
+                        AppState.sceneProgress[2] -= 0.02;  
+                    }
+                    AppState.sceneProgress[2] = THREE.MathUtils.clamp(AppState.sceneProgress[2], 0, 1);
+                } else {
+                    AppState.sceneProgress[2] = 0;
+                }
+            }
+        }
+    } else {
+        document.getElementById('tracking-status').classList.remove('active');
+        AppState.hand.detected = false; handCursor.style.opacity = 0;
+        AppState.hand.pinchStartY = 0;
+        if(AppState.currentScene === 1) AppState.sceneProgress[1] = THREE.MathUtils.lerp(AppState.sceneProgress[1], 0, 0.01);
+        if(AppState.currentScene === 2) AppState.sceneProgress[2] = THREE.MathUtils.lerp(AppState.sceneProgress[2], 0, 0.05);
+        if(AppState.currentScene === 0) resetHoverState();
+        if(AppState.currentScene > 0) resetUIHoverState();
+    }
+}
+
+function handleIntroInteraction(cursorX, cursorY) {
+    if (!AppState.introAwaked) {
+        AppState.introAwaked = true;
+        const introTitle = document.querySelector('.intro-title');
+        if (introTitle) introTitle.style.transform = 'translateY(-150px) scale(0.6)';
+        const introSubtitle = document.querySelector('.intro-subtitle');
+        if (introSubtitle) introSubtitle.style.transform = 'translateY(-150px) scale(0.6)';
+        const introPrompt = document.getElementById('intro-prompt');
+        if (introPrompt) introPrompt.style.opacity = 0;
+        const nodesContainer = document.getElementById('nodes-container');
+        if (nodesContainer) {
+            nodesContainer.style.opacity = 1;
+            nodesContainer.style.pointerEvents = 'auto';
+        }
+        playBGM(); 
+        VoiceManager.speak("这里，是水开始的地方...... 也是时间流经的路径。请移动双手悬停星轨节点，进入水的数字记忆之中。");
+        return;
+    }
+    let hoveringNodeId = null;
+    document.querySelectorAll('.node-item').forEach(node => {
+        const rect = node.getBoundingClientRect();
+        if (cursorX > rect.left && cursorX < rect.right && cursorY > rect.top && cursorY < rect.bottom) hoveringNodeId = parseInt(node.dataset.id);
+    });
+    if (hoveringNodeId) {
+        if (AppState.hoverState.targetNode !== hoveringNodeId) {
+            resetHoverState(); 
+            AppState.hoverState.targetNode = hoveringNodeId;
+            const el = document.getElementById(`node-${hoveringNodeId}`);
+            if (el) { el.style.borderColor = 'var(--primary-color)'; el.style.color = 'var(--primary-color)'; }
+            if (handCursor) handCursor.style.transform = 'translate(-50%, -50%) scale(1.5)';
+        }
+        AppState.hoverState.progress += 0.02;
+        const progEl = document.getElementById(`node-prog-${hoveringNodeId}`);
+        if (progEl) {
+            progEl.style.opacity = AppState.hoverState.progress;
+            progEl.style.transform = `rotate(${AppState.hoverState.progress * 360 - 90}deg)`;
+        }
+        if (AppState.hoverState.progress >= 1.0) enterScene(hoveringNodeId);
+    } else {
+        resetHoverState();
+    }
+}
+
+function resetHoverState() {
+    if (AppState.hoverState.targetNode) {
+        const el = document.getElementById(`node-${AppState.hoverState.targetNode}`);
+        if (el) { el.style.borderColor = 'rgba(0, 255, 204, 0.3)'; el.style.color = 'rgba(255, 255, 255, 0.5)'; }
+        const progEl = document.getElementById(`node-prog-${AppState.hoverState.targetNode}`);
+        if (progEl) progEl.style.opacity = 0;
+    }
+    AppState.hoverState.targetNode = null; AppState.hoverState.progress = 0;
+    if (handCursor) handCursor.style.transform = 'translate(-50%, -50%) scale(1)';
+}
+
+function handleUIInteraction(cursorX, cursorY) {
+    let hoveringBtnId = null;
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+        const rect = btn.getBoundingClientRect();
+        if (cursorX > rect.left && cursorX < rect.right && cursorY > rect.top && cursorY < rect.bottom) hoveringBtnId = btn.id;
+    });
+    if (hoveringBtnId) {
+        if (AppState.uiHoverState.targetBtn !== hoveringBtnId) {
+            resetUIHoverState(); AppState.uiHoverState.targetBtn = hoveringBtnId;
+            document.getElementById(hoveringBtnId).style.borderColor = 'var(--primary-color)';
+            handCursor.style.transform = 'translate(-50%, -50%) scale(1.5)';
+        }
+        AppState.uiHoverState.progress += 0.02;
+        const btn = document.getElementById(hoveringBtnId);
+        btn.style.background = `linear-gradient(90deg, rgba(0,255,204,0.4) ${AppState.uiHoverState.progress * 100}%, rgba(0,0,0,0.6) ${AppState.uiHoverState.progress * 100}%)`;
+        if (AppState.uiHoverState.progress >= 1.0) {
+            if (hoveringBtnId === 'btn-home') returnToHome();
+            else goToNextScene();
+            resetUIHoverState();
+        }
+    } else resetUIHoverState();
+}
+
+function resetUIHoverState() {
+    if (AppState.uiHoverState.targetBtn) {
+        const btn = document.getElementById(AppState.uiHoverState.targetBtn);
+        if (btn) { btn.style.borderColor = 'rgba(0, 255, 204, 0.4)'; btn.style.background = 'rgba(0, 0, 0, 0.6)'; }
+    }
+    AppState.uiHoverState.targetBtn = null; AppState.uiHoverState.progress = 0;
+    handCursor.style.transform = 'translate(-50%, -50%) scale(1)';
+}
+
+function enterScene(sceneId) {
+    AppState.currentScene = sceneId;
+    document.getElementById('intro-layer').style.opacity = 0;
+    document.getElementById('intro-layer').style.pointerEvents = 'none';
+    setTimeout(() => { document.getElementById('ui-layer').style.opacity = 1; document.getElementById('ui-layer').style.pointerEvents = 'auto'; }, 500);
+    const meta = SceneData.find(s => s.id === sceneId);
+    document.getElementById('unit-id-tag').innerText = `UNIT 0${sceneId}`;
+    document.getElementById('unit-name-text').innerText = meta.name;
+    document.getElementById('scene-title').innerText = `- ${meta.name} -`;
+    document.getElementById('btn-next').innerHTML = sceneId === 7 ? '返回中枢 ⏏' : '下一单元 ⏭';
+    if (sceneId === 1 || sceneId === 2) {
+        if (sceneId === 1) {
+            AppState.scene1EntranceProgress = 0; AppState.scene1NarrationState = 0;
+            AppState.scene1SuccessSpoken = false; AppState.scene1CurrentText = ""; 
+        } else {
+            AppState.scene2EntranceProgress = 0; AppState.scene2NarrationState = 0;
+            AppState.scene2SuccessSpoken = false; AppState.scene2CurrentText = ""; 
+        }
+        document.getElementById('subtitle-text').innerText = ""; 
+        VoiceManager.speakSequence(meta.descLines, (lineText) => {
+            if (sceneId === 1) AppState.scene1CurrentText = lineText; 
+            else if (sceneId === 2) AppState.scene2CurrentText = lineText; 
+            document.getElementById('subtitle-text').innerText = lineText;
+        });
+    } else {
+        document.getElementById('subtitle-text').innerText = meta.desc;
+        VoiceManager.speak(meta.desc);
+    }
+    for(let i=1; i<=7; i++) sceneGroups[i].visible = (i === sceneId);
+    AppState.waterOpacityTarget = (sceneId === 2) ? 0.0 : 0.15;
+    AppState.waterZTarget = -30; 
+    updateBGM();
+}
+
+function returnToHome() {
+    AppState.currentScene = 0;
+    VoiceManager.stop(); 
+    document.getElementById('ui-layer').style.opacity = 0;
+    document.getElementById('ui-layer').style.pointerEvents = 'none';
+    setTimeout(() => { document.getElementById('intro-layer').style.opacity = 1; document.getElementById('intro-layer').style.pointerEvents = 'auto'; }, 500);
+    for(let i=1; i<=7; i++) sceneGroups[i].visible = false;
+    AppState.waterOpacityTarget = 1.0; AppState.waterZTarget = 0; 
+    resetUIHoverState(); resetHoverState();
+    updateBGM();
+}
+
+const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+hands.onResults(onResults);
+const cameraMP = new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 1280, height: 720 });
+cameraMP.start().then(() => { document.getElementById('loading').style.opacity = '0'; setTimeout(() => document.getElementById('loading').style.display = 'none', 1000); });
+
+const clock = new THREE.Clock();
+function animate() {
+    requestAnimationFrame(animate);
+    const time = clock.getElapsedTime();
+    if (typeof AppState !== 'undefined' && globalWaterShaderMaterial) {
+        globalWaterShaderMaterial.uniforms.u_time.value = time;
+        AppState.waterOpacityCurrent = THREE.MathUtils.lerp(AppState.waterOpacityCurrent, AppState.waterOpacityTarget, 0.05);
+        globalWaterShaderMaterial.uniforms.u_opacity.value = AppState.waterOpacityCurrent;
+        AppState.waterZCurrent = THREE.MathUtils.lerp(AppState.waterZCurrent, AppState.waterZTarget, 0.03);
+        if (globalWaterMesh) globalWaterMesh.position.z = AppState.waterZCurrent;
+    }
+    if (typeof AppState !== 'undefined' && AppState.currentScene === 1 && s1_particles) {
+        AppState.scene1EntranceProgress = THREE.MathUtils.lerp(AppState.scene1EntranceProgress, 1.0, 0.005);
+        const ep = AppState.scene1EntranceProgress;
+        const easedEp = 1 - Math.pow(1 - ep, 4); 
+        const attr = s1_particles.geometry.attributes.position;
+        const orig = s1_particles.geometry.userData.originalPos;
+        const target = s1_particles.geometry.userData.targetPos;
+        const chaos = s1_particles.geometry.userData.chaosPos; 
+        const p = AppState.sceneProgress[1];
+        const subtitleText = document.getElementById('subtitle-text');
+        if (p > 0.9 && AppState.scene1NarrationState === 0) {
+            VoiceManager.stop(); 
+            subtitleText.innerText = SceneData[0].descSuccess;
+            if (!AppState.scene1SuccessSpoken) { VoiceManager.speak(SceneData[0].descSuccess); AppState.scene1SuccessSpoken = true; }
+            AppState.scene1NarrationState = 1;
+        } else if (p <= 0.9 && AppState.scene1NarrationState === 1) {
+            subtitleText.innerText = AppState.scene1CurrentText;
+            AppState.scene1NarrationState = 0;
+        }
+        if (s1_labelDom && s1_labelObj) {
+            s1_labelObj.updateMatrixWorld(true);
+            const vec = new THREE.Vector3(); s1_labelObj.getWorldPosition(vec); vec.project(camera);
+            s1_labelDom.style.left = `${(vec.x * .5 + .5) * window.innerWidth}px`;
+            s1_labelDom.style.top = `${(vec.y * -.5 + .5) * window.innerHeight}px`;
+            s1_labelDom.style.opacity = p; 
+            s1_labelDom.style.transform = `translate(-50%, calc(-50% - ${(1 - p) * 20}px))`; 
+        }
+        s1_particles.material.opacity = (0.2 + 0.3 * easedEp) + p * 0.5; 
+        for(let i=0; i < attr.count; i++) {
+            const idx = i * 3;
+            const baseX = THREE.MathUtils.lerp(chaos[idx], orig[idx], easedEp);
+            const baseY = THREE.MathUtils.lerp(chaos[idx+1], orig[idx+1], easedEp);
+            const baseZ = THREE.MathUtils.lerp(chaos[idx+2], orig[idx+2], easedEp);
+            const flowX = Math.sin(time * 0.5 + orig[idx+1] * 0.5) * 0.2 * (1 - p) * easedEp;
+            const flowY = Math.cos(time * 0.4 + orig[idx] * 0.5) * 0.2 * (1 - p) * easedEp;
+            const flowZ = Math.sin(time * 0.6 + orig[idx+2] * 0.5) * 0.2 * (1 - p) * easedEp;
+            attr.array[idx] = THREE.MathUtils.lerp(baseX, target[idx], p) + flowX;
+            attr.array[idx+1] = THREE.MathUtils.lerp(baseY, target[idx+1], p) + flowY;
+            attr.array[idx+2] = THREE.MathUtils.lerp(baseZ, target[idx+2], p) + flowZ;
+        }
+        attr.needsUpdate = true; sceneGroups[1].rotation.y = (1 - easedEp) * Math.PI;
+    }
+    if (typeof AppState !== 'undefined' && AppState.currentScene === 2) {
+        AppState.scene2EntranceProgress = THREE.MathUtils.lerp(AppState.scene2EntranceProgress, 1.0, 0.003); 
+        const ep2 = AppState.scene2EntranceProgress;
+        const p = AppState.sceneProgress[2];
+        const subtitleText = document.getElementById('subtitle-text');
+        
+        if (p > 0.6 && AppState.scene2NarrationState === 0) {
+            VoiceManager.stop(); 
+            subtitleText.innerText = SceneData[1].descSuccess;
+            if (!AppState.scene2SuccessSpoken) { VoiceManager.speak(SceneData[1].descSuccess); AppState.scene2SuccessSpoken = true; }
+            AppState.scene2NarrationState = 1;
+        } else if (p <= 0.6 && AppState.scene2NarrationState === 1) {
+            subtitleText.innerText = AppState.scene2CurrentText;
+            AppState.scene2NarrationState = 0;
+        }
+
+        if (s2_patternParticles) {
+            s2_patternParticles.material.uniforms.u_progress.value = ep2;
+            s2_patternParticles.material.uniforms.u_dissolve.value = p; 
+            s2_patternParticles.material.uniforms.u_time.value = time;
+            const sweep = 1.0 - Math.pow(1.0 - ep2, 4.0); 
+            sceneGroups[2].scale.setScalar(1.0 + sweep * 0.3); 
+            sceneGroups[2].rotation.z = (1.0 - sweep) * Math.PI * 0.25; 
+            sceneGroups[2].rotation.x = (1.0 - sweep) * Math.PI * 0.25;
+            sceneGroups[2].rotation.y = (1.0 - sweep) * Math.PI * 0.5 + Math.sin(time * 0.2) * 0.05; 
+        }
+
+        const bronzeOpacity = p;
+        s2_parts.forEach((part, index) => {
+            part.material.opacity = bronzeOpacity;
+            part.material.transparent = true; 
+            part.visible = bronzeOpacity > 0.01; 
+            part.position.lerpVectors(part.userData.targetPos, part.userData.origPos, Math.pow(p, 0.5)); 
+            
+            if (p > 0.1) {
+                const vec = new THREE.Vector3(); part.getWorldPosition(vec); vec.project(camera);
+                part.userData.domElement.style.left = `${(vec.x * .5 + .5) * window.innerWidth}px`;
+                part.userData.domElement.style.top = `${(-vec.y * .5 + .5) * window.innerHeight}px`;
+                part.userData.domElement.style.opacity = THREE.MathUtils.clamp((p - 0.2) * 2, 0, 1) * bronzeOpacity;
+            } else { 
+                part.userData.domElement.style.opacity = 0; 
+            }
+        });
+    }
+    renderer.render(scene, camera);
+}
+animate();
+window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+</script>
+</body>
+</html>
